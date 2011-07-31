@@ -1,7 +1,8 @@
 /*
  * The MIT License
  * 
- * Copyright (c) 2004-2009, Sun Microsystems, Inc., Kohsuke Kawaguchi, Red Hat, Inc., Tom Huybrechts
+ * Copyright (c) 2004-2011, Sun Microsystems, Inc., Kohsuke Kawaguchi,
+ * Red Hat, Inc., Tom Huybrechts
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -167,10 +168,11 @@ public class MatrixBuild extends AbstractBuild<MatrixProject,MatrixBuild> {
     }
 
     /**
-     * Returns all {@link MatrixRun}s for this {@link MatrixBuild}.
+     * Returns all {@link MatrixRun}s for exactly this {@link MatrixBuild}.
      * <p>
-     * Unlike {@link #getExactRuns()}, this method excludes those runs
+     * Unlike {@link #getRuns()}, this method excludes those runs
      * that didn't run and got inherited.
+     * @since 1.413
      */
     public List<MatrixRun> getExactRuns() {
         List<MatrixRun> r = new ArrayList<MatrixRun>();
@@ -193,7 +195,7 @@ public class MatrixBuild extends AbstractBuild<MatrixProject,MatrixBuild> {
      * True if this build didn't do a full build and it is depending on the result of the previous build.
      */
     public boolean isPartial() {
-        for(MatrixConfiguration c : getParent().getItems()) {
+        for(MatrixConfiguration c : getParent().getActiveConfigurations()) {
             MatrixRun b = c.getNearestOldBuild(getNumber());
             if (b != null && b.getNumber()!=getNumber())
                 return true;

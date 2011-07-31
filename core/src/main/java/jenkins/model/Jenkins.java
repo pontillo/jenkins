@@ -25,6 +25,61 @@
  */
 package jenkins.model;
 
+import hudson.model.Node;
+import hudson.model.AbstractCIBase;
+import hudson.model.AbstractProject;
+import hudson.model.Action;
+import hudson.model.AdministrativeMonitor;
+import hudson.model.AllView;
+import hudson.model.Api;
+import hudson.model.Computer;
+import hudson.model.ComputerSet;
+import hudson.model.DependencyGraph;
+import hudson.model.Describable;
+import hudson.model.Descriptor;
+import hudson.model.DescriptorByNameOwner;
+import hudson.model.DirectoryBrowserSupport;
+import hudson.model.Failure;
+import hudson.model.Fingerprint;
+import hudson.model.FingerprintCleanupThread;
+import hudson.model.FingerprintMap;
+import hudson.model.FullDuplexHttpChannel;
+import hudson.model.Hudson;
+import hudson.model.Item;
+import hudson.model.ItemGroup;
+import hudson.model.ItemGroupMixIn;
+import hudson.model.Items;
+import hudson.model.JDK;
+import hudson.model.Job;
+import hudson.model.JobPropertyDescriptor;
+import hudson.model.Label;
+import hudson.model.ListView;
+import hudson.model.LoadBalancer;
+import hudson.model.ManagementLink;
+import hudson.model.ModifiableItemGroup;
+import hudson.model.NoFingerprintMatch;
+import hudson.model.OverallLoadStatistics;
+import hudson.model.Project;
+import hudson.model.RestartListener;
+import hudson.model.RootAction;
+import hudson.model.Slave;
+import hudson.model.TaskListener;
+import hudson.model.TopLevelItem;
+import hudson.model.TopLevelItemDescriptor;
+import hudson.model.UnprotectedRootAction;
+import hudson.model.UpdateCenter;
+import hudson.model.User;
+import hudson.model.View;
+import hudson.model.ViewGroup;
+import hudson.model.ViewGroupMixIn;
+import hudson.model.Descriptor.FormException;
+import hudson.model.labels.LabelAtom;
+import hudson.model.listeners.ItemListener;
+import hudson.model.listeners.SCMListener;
+import hudson.model.listeners.SaveableListener;
+import hudson.model.Queue;
+import hudson.model.WorkspaceCleanupThread;
+
 import antlr.ANTLRException;
 import com.google.common.collect.ImmutableMap;
 import com.thoughtworks.xstream.XStream;
@@ -45,7 +100,6 @@ import hudson.Plugin;
 import hudson.PluginManager;
 import hudson.PluginWrapper;
 import hudson.ProxyConfiguration;
-import hudson.StructuredForm;
 import hudson.TcpSlaveAgentListener;
 import hudson.UDPBroadcastThread;
 import hudson.Util;
@@ -65,12 +119,6 @@ import hudson.lifecycle.Lifecycle;
 import hudson.logging.LogRecorderManager;
 import hudson.lifecycle.RestartNotSupportedException;
 import hudson.markup.RawHtmlMarkupFormatter;
-import hudson.model.*;
-import hudson.model.Descriptor.FormException;
-import hudson.model.labels.LabelAtom;
-import hudson.model.listeners.ItemListener;
-import hudson.model.listeners.SCMListener;
-import hudson.model.listeners.SaveableListener;
 import hudson.remoting.Channel;
 import hudson.remoting.LocalChannel;
 import hudson.remoting.VirtualChannel;
@@ -88,6 +136,7 @@ import hudson.security.LegacyAuthorizationStrategy;
 import hudson.security.LegacySecurityRealm;
 import hudson.security.Permission;
 import hudson.security.PermissionGroup;
+import hudson.security.PermissionScope;
 import hudson.security.SecurityMode;
 import hudson.security.SecurityRealm;
 import hudson.security.csrf.CrumbIssuer;
@@ -822,6 +871,27 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
         return slaveAgentPort;
     }
 
+    /**
+     * @param port
+     *      0 to indicate random available TCP port. -1 to disable this service.
+     */
+    public void setSlaveAgentPort(int port) throws IOException {
+        this.slaveAgentPort = port;
+
+        // relaunch the agent
+        if(tcpSlaveAgentListener==null) {
+            if(slaveAgentPort!=-1)
+                tcpSlaveAgentListener = new TcpSlaveAgentListener(slaveAgentPort);
+        } else {
+            if(tcpSlaveAgentListener.configuredPort!=slaveAgentPort) {
+                tcpSlaveAgentListener.shutdown();
+                tcpSlaveAgentListener = null;
+                if(slaveAgentPort!=-1)
+                    tcpSlaveAgentListener = new TcpSlaveAgentListener(slaveAgentPort);
+            }
+        }
+    }
+
     public void setNodeName(String name) {
         throw new UnsupportedOperationException(); // not allowed
     }
@@ -1316,8 +1386,16 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
         return viewGroupMixIn.getPrimaryView();
      }
 
+    public void setPrimaryView(View v) {
+        this.primaryView = v.getViewName();
+    }
+
     public ViewsTabBar getViewsTabBar() {
         return viewsTabBar;
+    }
+
+    public void setViewsTabBar(ViewsTabBar viewsTabBar) {
+        this.viewsTabBar = viewsTabBar;
     }
 
     public Jenkins getItemGroup() {
@@ -1326,6 +1404,10 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
 
     public MyViewsTabBar getMyViewsTabBar() {
         return myViewsTabBar;
+    }
+
+    public void setMyViewsTabBar(MyViewsTabBar myViewsTabBar) {
+        this.myViewsTabBar = myViewsTabBar;
     }
 
     /**
@@ -1606,10 +1688,26 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
     }
 
     /**
+     * Sets the global quiet period.
+     *
+     * @param quietPeriod
+     *      null to the default value.
+     */
+    public void setQuietPeriod(Integer quietPeriod) throws IOException {
+        this.quietPeriod = quietPeriod;
+        save();
+    }
+
+    /**
      * Gets the global SCM check out retry count.
      */
     public int getScmCheckoutRetryCount() {
         return scmCheckoutRetryCount;
+    }
+
+    public void setScmCheckoutRetryCount(int scmCheckoutRetryCount) throws IOException {
+        this.scmCheckoutRetryCount = scmCheckoutRetryCount;
+        save();
     }
 
     @Override
@@ -1798,6 +1896,7 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
     public void setSecurityRealm(SecurityRealm securityRealm) {
         if(securityRealm==null)
             securityRealm= SecurityRealm.NO_AUTHENTICATION;
+        this.useSecurity = true;
         this.securityRealm = securityRealm;
         // reset the filters and proxies for the new SecurityRealm
         try {
@@ -1820,7 +1919,15 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
     public void setAuthorizationStrategy(AuthorizationStrategy a) {
         if (a == null)
             a = AuthorizationStrategy.UNSECURED;
+        useSecurity = true;
         authorizationStrategy = a;
+    }
+
+    public void disableSecurity() {
+        useSecurity = null;
+        setSecurityRealm(SecurityRealm.NO_AUTHENTICATION);
+        authorizationStrategy = AuthorizationStrategy.UNSECURED;
+        markupFormatter = null;
     }
 
     public Lifecycle getLifecycle() {
@@ -1887,6 +1994,7 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
      * can be finished while other current pending builds
      * are still in progress.
      */
+    @Exported
     public boolean isQuietingDown() {
         return isQuietingDown;
     }
@@ -2168,8 +2276,18 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
         return mode;
     }
 
+    public void setMode(Mode m) throws IOException {
+        this.mode = m;
+        save();
+    }
+
     public String getLabelString() {
         return fixNull(label).trim();
+    }
+
+    public void setLabelString(String label) throws IOException {
+        this.label = label;
+        save();
     }
 
     @Override
@@ -2371,91 +2489,6 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
             workspaceDir = json.getString("rawWorkspaceDir");
             buildsDir = json.getString("rawBuildsDir");
 
-            // keep using 'useSecurity' field as the main configuration setting
-            // until we get the new security implementation working
-            // useSecurity = null;
-            if (json.has("use_security")) {
-                useSecurity = true;
-                JSONObject security = json.getJSONObject("use_security");
-                setSecurityRealm(SecurityRealm.all().newInstanceFromRadioList(security,"realm"));
-                setAuthorizationStrategy(AuthorizationStrategy.all().newInstanceFromRadioList(security, "authorization"));
-
-                if (security.has("markupFormatter")) {
-                    markupFormatter = req.bindJSON(MarkupFormatter.class,security.getJSONObject("markupFormatter"));
-                } else {
-                    markupFormatter = null;
-                }
-            } else {
-                useSecurity = null;
-                setSecurityRealm(SecurityRealm.NO_AUTHENTICATION);
-                authorizationStrategy = AuthorizationStrategy.UNSECURED;
-                markupFormatter = null;
-            }
-
-            if (json.has("csrf")) {
-            	JSONObject csrf = json.getJSONObject("csrf");
-                setCrumbIssuer(CrumbIssuer.all().newInstanceFromRadioList(csrf, "issuer"));
-            } else {
-            	setCrumbIssuer(null);
-            }
-
-            if (json.has("viewsTabBar")) {
-                viewsTabBar = req.bindJSON(ViewsTabBar.class,json.getJSONObject("viewsTabBar"));
-            } else {
-                viewsTabBar = new DefaultViewsTabBar();
-            }
-
-            if (json.has("myViewsTabBar")) {
-                myViewsTabBar = req.bindJSON(MyViewsTabBar.class,json.getJSONObject("myViewsTabBar"));
-            } else {
-                myViewsTabBar = new DefaultMyViewsTabBar();
-            }
-
-            primaryView = json.has("primaryView") ? json.getString("primaryView") : getViews().iterator().next().getViewName();
-
-            noUsageStatistics = json.has("usageStatisticsCollected") ? null : true;
-
-            {
-                String v = req.getParameter("slaveAgentPortType");
-                if(!isUseSecurity() || v==null || v.equals("random"))
-                    slaveAgentPort = 0;
-                else
-                if(v.equals("disable"))
-                    slaveAgentPort = -1;
-                else {
-                    try {
-                        slaveAgentPort = Integer.parseInt(req.getParameter("slaveAgentPort"));
-                    } catch (NumberFormatException e) {
-                        throw new FormException(Messages.Hudson_BadPortNumber(req.getParameter("slaveAgentPort")),"slaveAgentPort");
-                    }
-                }
-
-                // relaunch the agent
-                if(tcpSlaveAgentListener==null) {
-                    if(slaveAgentPort!=-1)
-                        tcpSlaveAgentListener = new TcpSlaveAgentListener(slaveAgentPort);
-                } else {
-                    if(tcpSlaveAgentListener.configuredPort!=slaveAgentPort) {
-                        tcpSlaveAgentListener.shutdown();
-                        tcpSlaveAgentListener = null;
-                        if(slaveAgentPort!=-1)
-                            tcpSlaveAgentListener = new TcpSlaveAgentListener(slaveAgentPort);
-                    }
-                }
-            }
-
-            numExecutors = json.getInt("numExecutors");
-            if(req.hasParameter("master.mode"))
-                mode = Mode.valueOf(req.getParameter("master.mode"));
-            else
-                mode = Mode.NORMAL;
-
-            label = json.optString("labelString","");
-
-            quietPeriod = json.getInt("quiet_period");
-
-            scmCheckoutRetryCount = json.getInt("retry_count");
-
             systemMessage = Util.nullify(req.getParameter("system_message"));
 
             jdks.clear();
@@ -2464,16 +2497,6 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
             boolean result = true;
             for( Descriptor<?> d : Functions.getSortedDescriptorsForGlobalConfig() )
                 result &= configureDescriptor(req,json,d);
-
-            for( JSONObject o : StructuredForm.toList(json,"plugin"))
-                pluginManager.getPlugin(o.getString("name")).getPlugin().configure(req, o);
-
-            clouds.rebuildHetero(req,json, Cloud.all(), "cloud");
-
-            JSONObject np = json.getJSONObject("globalNodeProperties");
-            if (!np.isNullObject()) {
-                globalNodeProperties.rebuild(req, np, NodeProperty.for_(this));
-            }
 
             version = VERSION;
 
@@ -3586,7 +3609,7 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
 
     public static final PermissionGroup PERMISSIONS = Permission.HUDSON_PERMISSIONS;
     public static final Permission ADMINISTER = Permission.HUDSON_ADMINISTER;
-    public static final Permission READ = new Permission(PERMISSIONS,"Read",Messages._Hudson_ReadPermission_Description(),Permission.READ);
+    public static final Permission READ = new Permission(PERMISSIONS,"Read",Messages._Hudson_ReadPermission_Description(),Permission.READ,PermissionScope.JENKINS);
 
     /**
      * {@link Authentication} object that represents the anonymous user.

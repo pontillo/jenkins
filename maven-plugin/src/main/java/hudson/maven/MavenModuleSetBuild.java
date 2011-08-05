@@ -27,6 +27,7 @@ package hudson.maven;
 import static hudson.model.Result.FAILURE;
 import hudson.AbortException;
 import hudson.EnvVars;
+import hudson.ExtensionList;
 import hudson.FilePath;
 import hudson.FilePath.FileCallable;
 import hudson.Launcher;
@@ -35,6 +36,7 @@ import hudson.maven.MavenBuild.ProxyImpl2;
 import hudson.maven.reporters.MavenAggregatedArtifactRecord;
 import hudson.maven.reporters.MavenFingerprinter;
 import hudson.maven.reporters.MavenMailer;
+import hudson.maven.settings.MavenSettingsProvider;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
@@ -45,6 +47,8 @@ import hudson.model.Computer;
 import hudson.model.Environment;
 import hudson.model.Executor;
 import hudson.model.Fingerprint;
+import jenkins.configprovider.ConfigProvider;
+import jenkins.configprovider.model.Config;
 import jenkins.model.Jenkins;
 import hudson.model.ParameterDefinition;
 import hudson.model.ParametersAction;
@@ -65,6 +69,7 @@ import hudson.util.MaskingClassLoader;
 import hudson.util.ReflectionUtils;
 import hudson.util.StreamTaskListener;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -85,6 +90,7 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.maven.BuildFailureException;
@@ -575,6 +581,7 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
         protected Result doRun(final BuildListener listener) throws Exception {
             PrintStream logger = listener.getLogger();
             Result r = null;
+            File tmpSettingsFile = null;
             try {
                 
                 EnvVars envVars = getEnvironment(listener);
@@ -619,6 +626,36 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
 
                         if(!preBuild(listener, project.getPublishers()))
                             return Result.FAILURE;
+
+
+                        String settingsConfigId = project.getSettingConfigId();
+                        if (settingsConfigId != null) {
+                            Config config = null;
+                            ExtensionList<ConfigProvider> configProviders = ConfigProvider.all();
+                            if (configProviders != null && configProviders.size() > 0) {
+                                for (ConfigProvider configProvider : configProviders) {
+                                    if (configProvider instanceof MavenSettingsProvider ) {
+                                        if ( configProvider.isResponsibleFor( settingsConfigId ) ) {
+                                            config = configProvider.getConfigById( settingsConfigId );
+                                        }
+                                    }
+                                }
+                            }
+                            if (config == null) {
+                                logger.println(" your Apache Maven build is setup to use a config with id " + settingsConfigId
+                                                   + " but cannot find the config");
+                            } else {
+                                logger.println("using settings config with name " + config.name);
+                                String settingsContent = config.content;
+                                if (settingsContent != null ) {
+                                    tmpSettingsFile = File.createTempFile( "maven-settings", "xml" );
+                                    FilePath target = new FilePath(getWorkspace(), tmpSettingsFile.getName());
+                                    ByteArrayInputStream bs = new ByteArrayInputStream(settingsContent.getBytes());
+                                    target.copyFrom(bs);
+                                    project.setAlternateSettings( target.getRemote() );
+                                }
+                            }
+                        }
 
                         parsePoms(listener, logger, envVars, mvn, mavenVersion); // #5428 : do pre-build *before* parsing pom
                         SplittableBuildListener slistener = new SplittableBuildListener(listener);
@@ -687,6 +724,8 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
                         ArgumentListBuilder margs = new ArgumentListBuilder().add("-B").add("-f", pom.getRemote());
                         if(project.usesPrivateRepository())
                             margs.add("-Dmaven.repo.local="+getWorkspace().child(".repository"));
+
+
                         
                         // If incrementalBuild is set
                         // and the previous build didn't specify that we need a full build
@@ -793,6 +832,8 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
                 logger.println("project.getModules()="+project.getModules());
                 logger.println("project.getRootModule()="+project.getRootModule());
                 throw e;
+            } finally {
+                FileUtils.deleteQuietly( tmpSettingsFile );
             }
         }
 

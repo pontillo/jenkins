@@ -40,8 +40,6 @@ import hudson.model.DependencyGraph;
 import hudson.model.Descriptor;
 import hudson.model.Descriptor.FormException;
 import hudson.model.Executor;
-import jenkins.configprovider.ConfigProvider;
-import jenkins.configprovider.model.Config;
 import jenkins.model.Jenkins;
 import hudson.model.Item;
 import hudson.model.ItemGroup;
@@ -90,6 +88,8 @@ import net.sf.json.JSONObject;
 
 import org.apache.commons.lang.math.NumberUtils;
 import org.apache.maven.model.building.ModelBuildingRequest;
+import org.jenkinsci.lib.configprovider.ConfigProvider;
+import org.jenkinsci.lib.configprovider.model.Config;
 import org.kohsuke.stapler.HttpResponse;
 import org.kohsuke.stapler.HttpResponses;
 import org.kohsuke.stapler.QueryParameter;

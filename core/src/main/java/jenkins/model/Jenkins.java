@@ -1819,6 +1819,7 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
         return new File(Util.replaceMacro(base, ImmutableMap.of(
                 "JENKINS_HOME", getRootDir().getPath(),
                 "ITEM_ROOTDIR", item.getRootDir().getPath(),
+                "ITEM_FULLNAME_NOSPACES", item.getFullName().replaceAll(" ", ""),
                 "ITEM_FULLNAME", item.getFullName())));
     }
     
